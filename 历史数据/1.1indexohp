@@ -1,0 +1,605 @@
+<?php
+// 配置文件
+define('DATA_FILE', 'data.txt');
+define('USER_FILE', 'users.txt');
+session_start();
+
+// 初始化数据文件
+if (!file_exists(DATA_FILE)) file_put_contents(DATA_FILE, '');
+if (!file_exists(USER_FILE)) {
+    $defaultUsers = [
+        'admin' => password_hash('admin123', PASSWORD_DEFAULT)
+    ];
+    file_put_contents(USER_FILE, serialize($defaultUsers));
+}
+
+// 加载用户数据
+$users = unserialize(file_get_contents(USER_FILE));
+
+// 处理登录
+if (isset($_POST['login'])) {
+    $username = $_POST['username'] ?? '';
+    $password = $_POST['password'] ?? '';
+    
+    if (isset($users[$username]) && password_verify($password, $users[$username])) {
+        $_SESSION['user'] = $username;
+        $_SESSION['is_admin'] = ($username === 'admin');
+    } else {
+        $login_error = "用户名或密码错误";
+    }
+}
+
+// 处理登出
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: index.php");
+    exit;
+}
+
+// 加载数据
+$data = [];
+if (file_exists(DATA_FILE)) {
+    $lines = file(DATA_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        $data[] = explode('|', $line);
+    }
+}
+
+// 反转数组以显示最新记录在前
+$data = array_reverse($data);
+
+// 处理添加记录
+if (isset($_POST['add']) && isset($_SESSION['is_admin']) && $_SESSION['is_admin']) {
+    $team = $_POST['team'] ?? '';
+    $name = $_POST['name'] ?? '';
+    $project = $_POST['project'] ?? '';
+    $score = $_POST['score'] ?? '';
+    $date = date('Y-m-d');
+    $weekday = date('N');
+    $weekdays = ['', '一', '二', '三', '四', '五', '六', '日'];
+    
+    $newEntry = [
+        $team,
+        $name,
+        $project,
+        $score,
+        $date,
+        '星期' . $weekdays[$weekday]
+    ];
+    
+    file_put_contents(DATA_FILE, implode('|', $newEntry) . PHP_EOL, FILE_APPEND | LOCK_EX);
+    header("Location: index.php");
+    exit;
+}
+
+// 处理删除记录
+if (isset($_GET['delete']) && isset($_SESSION['is_admin']) && $_SESSION['is_admin']) {
+    $id = (int)$_GET['delete'];
+    if (isset($data[$id])) {
+        unset($data[$id]);
+        saveData($data);
+    }
+    header("Location: index.php");
+    exit;
+}
+
+// 保存数据到文件
+function saveData($data) {
+    $content = '';
+    foreach (array_reverse($data) as $entry) {
+        if (!empty($entry)) {
+            $content .= implode('|', $entry) . PHP_EOL;
+        }
+    }
+    file_put_contents(DATA_FILE, $content);
+}
+
+// 统计本月学分
+function calculateMonthlyStats($data) {
+    $currentMonth = date('n');
+    $currentYear = date('Y');
+    
+    $stats = [];
+    $excellentShares = [];
+    
+    foreach ($data as $entry) {
+        list($team, $name, $project, $score, $date) = $entry;
+        $entryMonth = date('n', strtotime($date));
+        $entryYear = date('Y', strtotime($date));
+        
+        if ($entryMonth == $currentMonth && $entryYear == $currentYear) {
+            if (!isset($stats[$name])) {
+                $stats[$name] = [
+                    'team' => $team,
+                    'reading' => 0,
+                    'excellent_share' => 0,
+                    'sports' => 0
+                ];
+            }
+            
+            switch ($project) {
+                case '读书打卡':
+                    $stats[$name]['reading'] += (int)$score;
+                    break;
+                case '优秀分享':
+                    $stats[$name]['excellent_share'] += (int)$score;
+                    $excellentShares[] = [
+                        'name' => $name,
+                        'date' => $date,
+                        'score' => (int)$score
+                    ];
+                    break;
+                case '健康运动':
+                    $stats[$name]['sports'] += (int)$score;
+                    break;
+            }
+        }
+    }
+    
+    // 计算总分
+    foreach ($stats as $name => &$stat) {
+        $stat['total_reading'] = $stat['reading'] + $stat['excellent_share'];
+    }
+    
+    return [$stats, $excellentShares];
+}
+
+// 统计优秀分享数据
+function calculateExcellentShares($excellentShares) {
+    $results = [];
+    
+    foreach ($excellentShares as $share) {
+        $name = $share['name'];
+        if (!isset($results[$name])) {
+            $results[$name] = [
+                'count' => 0,
+                'total_score' => 0,
+                'scores' => []
+            ];
+        }
+        
+        $results[$name]['count']++;
+        $results[$name]['total_score'] += $share['score'];
+        $results[$name]['scores'][] = $share;
+    }
+    
+    // 计算平均分
+    foreach ($results as $name => &$result) {
+        $result['average'] = $result['total_score'] / $result['count'];
+    }
+    
+    // 排序：按总学分降序，相同学分按100分次数降序
+    uasort($results, function($a, $b) {
+        if ($b['total_score'] !== $a['total_score']) {
+            return $b['total_score'] - $a['total_score'];
+        }
+        
+        // 比较100分次数
+        $a100 = count(array_filter($a['scores'], fn($s) => $s['score'] == 100));
+        $b100 = count(array_filter($b['scores'], fn($s) => $s['score'] == 100));
+        if ($a100 !== $b100) {
+            return $b100 - $a100;
+        }
+        
+        // 比较95分次数
+        $a95 = count(array_filter($a['scores'], fn($s) => $s['score'] == 95));
+        $b95 = count(array_filter($b['scores'], fn($s) => $s['score'] == 95));
+        if ($a95 !== $b95) {
+            return $b95 - $a95;
+        }
+        
+        // 比较90分次数
+        $a90 = count(array_filter($a['scores'], fn($s) => $s['score'] == 90));
+        $b90 = count(array_filter($b['scores'], fn($s) => $s['score'] == 90));
+        return $b90 - $a90;
+    });
+    
+    return $results;
+}
+
+// 获取本月统计数据
+list($monthlyStats, $excellentShares) = calculateMonthlyStats($data);
+$excellentStats = calculateExcellentShares($excellentShares);
+?>
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>运动读书打卡学分统计表</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white;
+            padding: 20px 0;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .card {
+            margin-bottom: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+            transition: transform 0.3s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .stats-table th {
+            background-color: #eef7ff;
+        }
+        .team-innovate {
+            border-left: 4px solid #ff6b6b;
+        }
+        .team-altruism {
+            border-left: 4px solid #4ecdc4;
+        }
+        .login-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            background: white;
+        }
+        .footer {
+            background-color: #f1f1f1;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+            font-size: 0.9em;
+        }
+        .btn-custom {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white;
+            border: none;
+        }
+        .btn-custom:hover {
+            background: linear-gradient(135deg, #5a0db8 0%, #1c68f0 100%);
+            color: white;
+        }
+        .nav-tabs .nav-link.active {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white !important;
+            border: none;
+        }
+        .excellent-badge {
+            background: linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%);
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <?php if (!isset($_SESSION['user'])): ?>
+            <!-- 登录表单 -->
+            <div class="login-container">
+                <h2 class="text-center mb-4">运动读书打卡统计系统</h2>
+                <?php if (isset($login_error)): ?>
+                    <div class="alert alert-danger"><?= $login_error ?></div>
+                <?php endif; ?>
+                <form method="post">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="username" name="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="password" name="password" required>
+                    </div>
+                    <button type="submit" name="login" class="btn btn-custom w-100">登录</button>
+                </form>
+                <div class="mt-3 text-center">
+                    <p class="text-muted">默认管理员账号: admin 密码: admin123</p>
+                </div>
+            </div>
+        <?php else: ?>
+            <!-- 主界面 -->
+            <div class="header text-center">
+                <h1>运动读书打卡学分统计表</h1>
+                <p class="mb-0">今日日期: <?= date('Y年m月d日') ?> <?= '星期' . ['日', '一', '二', '三', '四', '五', '六'][date('w')] ?></p>
+                <div class="mt-2">
+                    <span class="badge bg-light text-dark me-2">登录用户: <?= $_SESSION['user'] ?></span>
+                    <a href="?logout" class="btn btn-sm btn-light">退出登录</a>
+                </div>
+            </div>
+
+            <ul class="nav nav-tabs mb-4" id="myTab" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="home-tab" data-bs-toggle="tab" data-bs-target="#home" type="button" role="tab">打卡记录</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="stats-tab" data-bs-toggle="tab" data-bs-target="#stats" type="button" role="tab">月度统计</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="excellent-tab" data-bs-toggle="tab" data-bs-target="#excellent" type="button" role="tab">优秀分享</button>
+                </li>
+            </ul>
+
+            <div class="tab-content" id="myTabContent">
+                <!-- 打卡记录 -->
+                <div class="tab-pane fade show active" id="home" role="tabpanel">
+                    <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
+                        <div class="card border-primary mb-4">
+                            <div class="card-header bg-primary text-white">添加新记录</div>
+                            <div class="card-body">
+                                <form method="post">
+                                    <div class="row">
+                                        <div class="col-md-3 mb-3">
+                                            <label class="form-label">团队</label>
+                                            <select class="form-select" name="team" required>
+                                                <option value="创新">创新团队</option>
+                                                <option value="利他">利他团队</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3 mb-3">
+                                            <label class="form-label">姓名</label>
+                                            <input type="text" class="form-control" name="name" required>
+                                        </div>
+                                        <div class="col-md-3 mb-3">
+                                            <label class="form-label">项目</label>
+                                            <select class="form-select" name="project" required>
+                                                <option value="读书打卡">读书打卡</option>
+                                                <option value="优秀分享">优秀分享</option>
+                                                <option value="健康运动">健康运动</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3 mb-3">
+                                            <label class="form-label">得分</label>
+                                            <input type="number" class="form-control" name="score" min="1" max="100" required>
+                                        </div>
+                                    </div>
+                                    <button type="submit" name="add" class="btn btn-custom">添加记录</button>
+                                </form>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <div class="card">
+                        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                            <span>最近打卡记录</span>
+                            <small>显示最近20条记录</small>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>日期</th>
+                                            <th>团队</th>
+                                            <th>姓名</th>
+                                            <th>项目</th>
+                                            <th>得分</th>
+                                            <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
+                                                <th>操作</th>
+                                            <?php endif; ?>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php for ($i = 0; $i < min(20, count($data)); $i++): 
+                                            $entry = $data[$i];
+                                        ?>
+                                            <tr>
+                                                <td><?= $entry[4] ?? '' ?> <small class="text-muted"><?= $entry[5] ?? '' ?></small></td>
+                                                <td><?= $entry[0] ?? '' ?></td>
+                                                <td><?= $entry[1] ?? '' ?></td>
+                                                <td><?= $entry[2] ?? '' ?></td>
+                                                <td><span class="badge bg-success"><?= $entry[3] ?? '' ?></span></td>
+                                                <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
+                                                    <td>
+                                                        <a href="?delete=<?= count($data) - $i - 1 ?>" class="btn btn-sm btn-danger" onclick="return confirm('确定删除这条记录吗？')">删除</a>
+                                                    </td>
+                                                <?php endif; ?>
+                                            </tr>
+                                        <?php endfor; ?>
+                                        <?php if (count($data) === 0): ?>
+                                            <tr>
+                                                <td colspan="6" class="text-center text-muted py-4">暂无打卡记录</td>
+                                            </tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 月度统计 -->
+                <div class="tab-pane fade" id="stats" role="tabpanel">
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            本月学分统计 (<?= date('Y年m月') ?>)
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover stats-table">
+                                    <thead>
+                                        <tr>
+                                            <th>姓名</th>
+                                            <th>团队</th>
+                                            <th>读书打卡得分</th>
+                                            <th>优秀分享得分</th>
+                                            <th>读书打卡总学分</th>
+                                            <th>健康运动学分</th>
+                                            <th>本月总学分</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php 
+                                        $teamInnovate = [];
+                                        $teamAltruism = [];
+                                        ?>
+                                        <?php foreach ($monthlyStats as $name => $stat): 
+                                            $total = $stat['total_reading'] + $stat['sports'];
+                                            
+                                            if ($stat['team'] === '创新') {
+                                                $teamInnovate[$name] = $total;
+                                            } else {
+                                                $teamAltruism[$name] = $total;
+                                            }
+                                        ?>
+                                            <tr class="<?= $stat['team'] === '创新' ? 'team-innovate' : 'team-altruism' ?>">
+                                                <td><?= $name ?></td>
+                                                <td><?= $stat['team'] ?></td>
+                                                <td><?= $stat['reading'] ?></td>
+                                                <td><?= $stat['excellent_share'] ?></td>
+                                                <td><strong><?= $stat['total_reading'] ?></strong></td>
+                                                <td><?= $stat['sports'] ?></td>
+                                                <td><strong class="text-primary"><?= $total ?></strong></td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                        <?php if (empty($monthlyStats)): ?>
+                                            <tr>
+                                                <td colspan="7" class="text-center text-muted py-4">本月暂无数据</td>
+                                            </tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="row mt-4">
+                                <div class="col-md-6">
+                                    <div class="card border-danger">
+                                        <div class="card-header bg-danger text-white">
+                                            创新团队排名
+                                        </div>
+                                        <div class="card-body">
+                                            <?php if (!empty($teamInnovate)): 
+                                                arsort($teamInnovate);
+                                                $rank = 1;
+                                            ?>
+                                                <ul class="list-group">
+                                                    <?php foreach ($teamInnovate as $name => $score): ?>
+                                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                            <span><?= $rank ?>. <?= $name ?></span>
+                                                            <span class="badge bg-danger rounded-pill"><?= $score ?></span>
+                                                        </li>
+                                                    <?php 
+                                                        $rank++;
+                                                        endforeach; 
+                                                    ?>
+                                                </ul>
+                                            <?php else: ?>
+                                                <p class="text-muted">暂无数据</p>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card border-info">
+                                        <div class="card-header bg-info text-white">
+                                            利他团队排名
+                                        </div>
+                                        <div class="card-body">
+                                            <?php if (!empty($teamAltruism)): 
+                                                arsort($teamAltruism);
+                                                $rank = 1;
+                                            ?>
+                                                <ul class="list-group">
+                                                    <?php foreach ($teamAltruism as $name => $score): ?>
+                                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                            <span><?= $rank ?>. <?= $name ?></span>
+                                                            <span class="badge bg-info rounded-pill"><?= $score ?></span>
+                                                        </li>
+                                                    <?php 
+                                                        $rank++;
+                                                        endforeach; 
+                                                    ?>
+                                                </ul>
+                                            <?php else: ?>
+                                                <p class="text-muted">暂无数据</p>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 优秀分享统计 -->
+                <div class="tab-pane fade" id="excellent" role="tabpanel">
+                    <div class="card">
+                        <div class="card-header excellent-badge">
+                            本月优秀分享统计 (<?= date('Y年m月') ?>)
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>排名</th>
+                                            <th>姓名</th>
+                                            <th>团队</th>
+                                            <th>次数</th>
+                                            <th>总分</th>
+                                            <th>平均分</th>
+                                            <th>详情</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php 
+                                        $rank = 1;
+                                        foreach ($excellentStats as $name => $stat): 
+                                            $team = '';
+                                            foreach ($monthlyStats as $n => $s) {
+                                                if ($n === $name) {
+                                                    $team = $s['team'];
+                                                    break;
+                                                }
+                                            }
+                                        ?>
+                                            <tr>
+                                                <td><?= $rank ?></td>
+                                                <td><?= $name ?></td>
+                                                <td><?= $team ?></td>
+                                                <td><?= $stat['count'] ?></td>
+                                                <td><?= $stat['total_score'] ?></td>
+                                                <td><?= number_format($stat['average'], 1) ?></td>
+                                                <td>
+                                                    <?php foreach ($stat['scores'] as $detail): ?>
+                                                        <span class="badge bg-light text-dark me-1">
+                                                            <?= $detail['date'] ?>:<?= $detail['score'] ?>分
+                                                        </span>
+                                                    <?php endforeach; ?>
+                                                </td>
+                                            </tr>
+                                        <?php 
+                                            $rank++;
+                                            endforeach; 
+                                        ?>
+                                        <?php if (empty($excellentStats)): ?>
+                                            <tr>
+                                                <td colspan="7" class="text-center text-muted py-4">本月暂无优秀分享记录</td>
+                                            </tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 规则说明 -->
+            <div class="footer">
+                <h5>打分规则：</h5>
+                <ol>
+                    <li>学习日晚上20点前读书+分享并接龙积1分，学习日晚上22点前读书+点评回应并接龙积1分；</li>
+                    <li>优秀分享额外积3分（优秀分享班主任按照标准评选）；</li>
+                    <li>按要求完成一周至少运动3次的，一周积1次，一次积3分，完成两次及两次以下不积分。</li>
+                </ol>
+                <p class="mt-2 mb-0 text-muted text-end">系统版本: 1.0 | 最后更新: <?= date('Y-m-d') ?></p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
