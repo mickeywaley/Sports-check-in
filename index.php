@@ -268,6 +268,15 @@ function getPeriodRange($period, $date = null) {
                 'format' => 'Y-m-d'
             ];
             
+        case 'months12':
+            $start = date('Y-m-01', strtotime('-11 months', strtotime($date)));
+            $end = date('Y-m-t', strtotime('now'));
+            return [
+                'start' => $start,
+                'end' => $end,
+                'format' => 'Y-m-d'
+            ];
+            
         default:
             return [
                 'start' => '',
@@ -348,6 +357,11 @@ function filterByPeriod($data, $period, $date = null) {
                 return $record['date'] >= $start && $record['date'] <= $end;
             });
             
+        case 'months12':
+            return array_filter($validData, function($record) use ($start, $end) {
+                return $record['date'] >= $start && $record['date'] <= $end;
+            });
+            
         default:
             return $validData;
     }
@@ -358,10 +372,70 @@ $dayStats = calculateStats(filterByPeriod($data, 'day', $currentDate));
 $weekStats = calculateStats(filterByPeriod($data, 'week', $currentDate));
 $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
 
+// 获取最近12个月的统计
+$months12Stats = [];
+$months12Range = getPeriodRange('months12', $currentDate);
+
+// 生成最近12个月的列表
+$monthsList = [];
+$currentMonth = new DateTime($months12Range['start']);
+$endMonth = new DateTime($months12Range['end']);
+while ($currentMonth <= $endMonth) {
+    $monthKey = $currentMonth->format('Y-m');
+    $monthsList[] = $monthKey;
+    
+    // 计算该月的统计数据
+    $monthStart = $currentMonth->format('Y-m-01');
+    $monthEnd = $currentMonth->format('Y-m-t');
+    
+    $monthData = array_filter($data, function($record) use ($monthStart, $monthEnd) {
+        return $record['date'] >= $monthStart && $record['date'] <= $monthEnd;
+    });
+    
+    $monthSummary = [
+        'reading' => 0,
+        'sharing' => 0,
+        'exercise' => 0,
+        'total' => 0,
+        'peopleCount' => count(array_unique(array_column($monthData, 'name')))
+    ];
+    
+    foreach ($monthData as $record) {
+        $monthSummary['reading'] += $record['reading'] ?? 0;
+        $monthSummary['sharing'] += $record['sharing'] ?? 0;
+        
+        // 计算运动积分
+        if (!empty($record['exercise'])) {
+            $week = date('Y-W', strtotime($record['date']));
+            $monthSummary['exercise'] += 1; // 先累计次数
+        }
+    }
+    
+    // 计算实际运动积分（每周至少3次得3分）
+    $weeks = [];
+    foreach ($monthData as $record) {
+        if (!empty($record['exercise'])) {
+            $week = date('Y-W', strtotime($record['date']));
+            $weeks[$week] = ($weeks[$week] ?? 0) + 1;
+        }
+    }
+    
+    $monthSummary['exercise'] = 0;
+    foreach ($weeks as $count) {
+        if ($count >= 3) $monthSummary['exercise'] += 3;
+    }
+    
+    $monthSummary['total'] = $monthSummary['reading'] + $monthSummary['sharing'] + $monthSummary['exercise'];
+    $months12Stats[$monthKey] = $monthSummary;
+    
+    $currentMonth->modify('+1 month');
+}
+
 // 获取时间段范围
 $dayRange = getPeriodRange('day', $currentDate);
 $weekRange = getPeriodRange('week', $currentDate);
 $monthRange = getPeriodRange('month', $currentDate);
+$months12Range = getPeriodRange('months12', $currentDate);
 ?>
 
 <!DOCTYPE html>
@@ -393,6 +467,8 @@ $monthRange = getPeriodRange('month', $currentDate);
         .stats-container { display: none; }
         .stats-container.active { display: block; }
         .period-range { font-size: 0.9em; color: #666; margin-top: 5px; }
+        .month-stats { margin-top: 20px; }
+        .month-stats table { margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -519,7 +595,8 @@ $monthRange = getPeriodRange('month', $currentDate);
         <div class="period-selector">
             <button onclick="showStats('day')">当天</button>
             <button onclick="showStats('week')">本周</button>
-            <button onclick="showStats('month')" class="active">本月</button>
+            <button onclick="showStats('month')">本月</button>
+            <button onclick="showStats('months12')" class="active">最近12个月</button>
         </div>
         
         <!-- 个人统计 -->
@@ -610,6 +687,39 @@ $monthRange = getPeriodRange('month', $currentDate);
                 <?php endforeach; ?>
             </table>
         </div>
+        
+        <div id="months12-stats" class="stats-container active">
+            <h3>最近12个月统计
+                <div class="period-range">
+                    <?php echo date('Y年m月', strtotime($months12Range['start'])); ?>
+                    至 
+                    <?php echo date('Y年m月', strtotime($months12Range['end'])); ?>
+                </div>
+            </h3>
+            
+            <div class="month-stats">
+                <table>
+                    <tr>
+                        <th>月份</th>
+                        <th>参与人数</th>
+                        <th>读书点评</th>
+                        <th>优秀分享</th>
+                        <th>健康运动</th>
+                        <th>总积分</th>
+                    </tr>
+                    <?php foreach (array_reverse($months12Stats) as $monthKey => $stats): ?>
+                        <tr>
+                            <td><?php echo date('Y年m月', strtotime($monthKey . '-01')); ?></td>
+                            <td><?php echo $stats['peopleCount']; ?></td>
+                            <td><?php echo $stats['reading']; ?></td>
+                            <td><?php echo $stats['sharing']; ?></td>
+                            <td><?php echo $stats['exercise']; ?></td>
+                            <td><?php echo $stats['total']; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -629,7 +739,8 @@ $monthRange = getPeriodRange('month', $currentDate);
             
             const activeBtn = Array.from(document.querySelectorAll('.period-selector button')).find(btn => 
                 btn.textContent.includes(period === 'day' ? '当天' : 
-                    period === 'week' ? '本周' : '本月')
+                    period === 'week' ? '本周' : 
+                    period === 'month' ? '本月' : '最近12个月')
             );
             if (activeBtn) {
                 activeBtn.classList.add('active');
@@ -726,7 +837,7 @@ $monthRange = getPeriodRange('month', $currentDate);
         
         // 初始化显示当前激活的统计面板
         document.addEventListener('DOMContentLoaded', function() {
-            showStats('month');
+            showStats('months12');
         });
     </script>
 </body>
