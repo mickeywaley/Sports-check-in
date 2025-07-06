@@ -1,2 +1,15 @@
 # Sports-check-in
-运动打卡
+读书运动打卡
+--
+
+----------
+
+界面截图
+--
+
+<img src="https://raw.githubusercontent.com/mickeywaley/Sports-check-in/refs/heads/main/01.png"  />
+
+功能介绍
+--
+
+-----
