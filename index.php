@@ -235,6 +235,48 @@ if (isset($_GET['edit']) && isAdmin()) {
     $editData = array_shift($editData);
 }
 
+// 获取时间段函数 - 返回开始和结束日期
+function getPeriodRange($period, $date = null) {
+    $date = $date ?: date('Y-m-d');
+    
+    switch ($period) {
+        case 'day':
+            return [
+                'start' => $date,
+                'end' => $date,
+                'format' => 'Y-m-d'
+            ];
+            
+        case 'week':
+            $start = date('Y-m-d', strtotime('last Monday', strtotime($date)));
+            $end = date('Y-m-d', strtotime('next Sunday', strtotime($date)));
+            return [
+                'start' => $start,
+                'end' => $end,
+                'format' => 'Y-m-d'
+            ];
+            
+        case 'month':
+            $year = date('Y', strtotime($date));
+            $month = date('m', strtotime($date));
+            $days = date('t', strtotime("$year-$month-01"));
+            $start = "$year-$month-01";
+            $end = "$year-$month-$days";
+            return [
+                'start' => $start,
+                'end' => $end,
+                'format' => 'Y-m-d'
+            ];
+            
+        default:
+            return [
+                'start' => '',
+                'end' => '',
+                'format' => 'Y-m-d'
+            ];
+    }
+}
+
 // 统计数据函数
 function calculateStats($data) {
     $stats = [];
@@ -286,26 +328,22 @@ function filterByPeriod($data, $period, $date = null) {
         return !empty($record['date']) && strtotime($record['date']) !== false;
     });
     
+    $range = getPeriodRange($period, $date);
+    $start = $range['start'];
+    $end = $range['end'];
+    
     switch ($period) {
         case 'day':
-            $targetDate = $date;
-            return array_filter($validData, function($record) use ($targetDate) {
-                return $record['date'] === $targetDate;
+            return array_filter($validData, function($record) use ($start) {
+                return $record['date'] === $start;
             });
             
         case 'week':
-            $start = date('Y-m-d', strtotime('last Monday', strtotime($date)));
-            $end = date('Y-m-d', strtotime('next Sunday', strtotime($date)));
             return array_filter($validData, function($record) use ($start, $end) {
                 return $record['date'] >= $start && $record['date'] <= $end;
             });
             
         case 'month':
-            $year = date('Y', strtotime($date));
-            $month = date('m', strtotime($date));
-            $days = date('t', strtotime("$year-$month-01"));
-            $start = "$year-$month-01";
-            $end = "$year-$month-$days";
             return array_filter($validData, function($record) use ($start, $end) {
                 return $record['date'] >= $start && $record['date'] <= $end;
             });
@@ -319,6 +357,11 @@ function filterByPeriod($data, $period, $date = null) {
 $dayStats = calculateStats(filterByPeriod($data, 'day', $currentDate));
 $weekStats = calculateStats(filterByPeriod($data, 'week', $currentDate));
 $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
+
+// 获取时间段范围
+$dayRange = getPeriodRange('day', $currentDate);
+$weekRange = getPeriodRange('week', $currentDate);
+$monthRange = getPeriodRange('month', $currentDate);
 ?>
 
 <!DOCTYPE html>
@@ -349,6 +392,7 @@ $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
         .period-selector button { margin-right: 5px; }
         .stats-container { display: none; }
         .stats-container.active { display: block; }
+        .period-range { font-size: 0.9em; color: #666; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -480,7 +524,11 @@ $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
         
         <!-- 个人统计 -->
         <div id="day-stats" class="stats-container">
-            <h3>当天统计 (<?php echo $currentDate . ' ' . getWeekday($currentDate); ?>)</h3>
+            <h3>当天统计 
+                <div class="period-range">
+                    <?php echo date('Y年m月d日', strtotime($dayRange['start'])); ?>
+                </div>
+            </h3>
             <table>
                 <tr>
                     <th>姓名</th>
@@ -504,7 +552,13 @@ $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
         </div>
         
         <div id="week-stats" class="stats-container" style="display: none;">
-            <h3>本周统计</h3>
+            <h3>本周统计 
+                <div class="period-range">
+                    <?php echo date('Y年m月d日', strtotime($weekRange['start'])); ?>
+                    至 
+                    <?php echo date('Y年m月d日', strtotime($weekRange['end'])); ?>
+                </div>
+            </h3>
             <table>
                 <tr>
                     <th>姓名</th>
@@ -528,7 +582,13 @@ $monthStats = calculateStats(filterByPeriod($data, 'month', $currentDate));
         </div>
         
         <div id="month-stats" class="stats-container" style="display: none;">
-            <h3>本月统计</h3>
+            <h3>本月统计 
+                <div class="period-range">
+                    <?php echo date('Y年m月d日', strtotime($monthRange['start'])); ?>
+                    至 
+                    <?php echo date('Y年m月d日', strtotime($monthRange['end'])); ?>
+                </div>
+            </h3>
             <table>
                 <tr>
                     <th>姓名</th>
