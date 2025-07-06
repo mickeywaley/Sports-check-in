@@ -11,7 +11,7 @@
 
 <img src="https://raw.githubusercontent.com/mickeywaley/Sports-check-in/refs/heads/main/01.png"  />
 
-功能介绍
+功能介绍 V1.9
 --
 
 # 运动读书打卡学分统计系统功能介绍
